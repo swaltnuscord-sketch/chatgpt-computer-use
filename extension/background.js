@@ -56,6 +56,31 @@ chrome.storage.onChanged.addListener((changes) => {
 });
 
 /**
+ * Normalize input URL to valid WebSocket protocol (ws:// or wss://)
+ */
+function normalizeWsUrl(rawUrl) {
+  if (!rawUrl) return 'ws://localhost:3000/ws';
+  let url = rawUrl.trim();
+  if (url.startsWith('https://')) {
+    url = 'wss://' + url.slice(8);
+  } else if (url.startsWith('http://')) {
+    url = 'ws://' + url.slice(7);
+  } else if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+    url = 'ws://' + url;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname || parsed.pathname === '/') {
+      parsed.pathname = '/ws';
+    }
+    return parsed.toString();
+  } catch (_) {
+    return url;
+  }
+}
+
+/**
  * Connect to Cloud / Local Relay Server via WebSocket
  */
 function connectWebSocket() {
@@ -64,7 +89,8 @@ function connectWebSocket() {
   }
 
   try {
-    const urlObj = new URL(currentConfig.serverUrl);
+    const normalizedUrl = normalizeWsUrl(currentConfig.serverUrl);
+    const urlObj = new URL(normalizedUrl);
     urlObj.searchParams.set('role', 'extension_bg');
     if (currentConfig.secretToken) {
       urlObj.searchParams.set('token', currentConfig.secretToken);
@@ -73,7 +99,7 @@ function connectWebSocket() {
     ws = new WebSocket(urlObj.toString());
 
     ws.onopen = () => {
-      console.log('[Background] Connected to Relay Server');
+      console.log('[Background] Connected to Relay Server at:', normalizedUrl);
       connectionState.connected = true;
       connectionState.lastError = null;
       reconnectAttempts = 0;
@@ -94,12 +120,11 @@ function connectWebSocket() {
         const msg = JSON.parse(event.data);
         await handleServerMessage(msg);
       } catch (err) {
-        console.error('[Background] Failed to handle message:', err);
+        console.error('[Background] Failed to parse message:', err);
       }
     };
 
     ws.onclose = (event) => {
-      console.warn(`[Background] WebSocket closed (code: ${event.code})`);
       connectionState.connected = false;
       connectionState.authenticated = false;
       updateBadge('OFF', '#ef4444');
@@ -108,12 +133,11 @@ function connectWebSocket() {
     };
 
     ws.onerror = (err) => {
-      console.error('[Background] WebSocket error:', err);
-      connectionState.lastError = 'Connection failed';
+      connectionState.lastError = 'Relay server offline or unreachable';
       broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
     };
   } catch (e) {
-    console.error('[Background] Invalid WebSocket URL:', e);
+    console.warn('[Background] Relay connection pending:', e.message);
     connectionState.lastError = e.message;
     scheduleReconnect();
   }
@@ -121,9 +145,8 @@ function connectWebSocket() {
 
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
-  const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), MAX_RECONNECT_DELAY);
+  const delay = Math.min(2000 * Math.pow(1.5, reconnectAttempts), MAX_RECONNECT_DELAY);
   reconnectAttempts++;
-  console.log(`[Background] Scheduling reconnect in ${delay}ms (attempt #${reconnectAttempts})`);
   reconnectTimer = setTimeout(connectWebSocket, delay);
 }
 

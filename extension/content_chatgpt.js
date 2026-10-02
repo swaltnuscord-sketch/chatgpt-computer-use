@@ -23,11 +23,37 @@ chrome.storage.local.get(['serverUrl', 'secretToken', 'autoSubmit'], (stored) =>
 });
 
 /**
+ * Normalize input URL to valid WebSocket protocol (ws:// or wss://)
+ */
+function normalizeWsUrl(rawUrl) {
+  if (!rawUrl) return 'ws://localhost:3000/ws';
+  let url = rawUrl.trim();
+  if (url.startsWith('https://')) {
+    url = 'wss://' + url.slice(8);
+  } else if (url.startsWith('http://')) {
+    url = 'ws://' + url.slice(7);
+  } else if (!url.startsWith('ws://') && !url.startsWith('wss://')) {
+    url = 'ws://' + url;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname || parsed.pathname === '/') {
+      parsed.pathname = '/ws';
+    }
+    return parsed.toString();
+  } catch (_) {
+    return url;
+  }
+}
+
+/**
  * Initialize direct WebSocket connection to Relay Hub
  */
 function initRelayWebSocket() {
   try {
-    const urlObj = new URL(currentConfig.serverUrl);
+    const normalizedUrl = normalizeWsUrl(currentConfig.serverUrl);
+    const urlObj = new URL(normalizedUrl);
     urlObj.searchParams.set('role', 'chatgpt_ui');
     if (currentConfig.secretToken) {
       urlObj.searchParams.set('token', currentConfig.secretToken);
@@ -36,7 +62,7 @@ function initRelayWebSocket() {
     ws = new WebSocket(urlObj.toString());
 
     ws.onopen = () => {
-      console.log('[ChatGPT Interceptor] Connected to Relay Server');
+      console.log('[ChatGPT Interceptor] Connected to Relay Server at:', normalizedUrl);
       ws.send(
         JSON.stringify({
           type: 'AUTH',
