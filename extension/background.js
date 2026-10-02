@@ -1,7 +1,7 @@
 /**
  * Background Service Worker for ChatGPT Computer-Use Agent (Manifest V3)
- * Fully hardened against MV3 lifecycle idle timeouts, restricted tab URLs,
- * React-controlled inputs, and WebSocket connection errors.
+ * Fully hardened with named handler functions, clean connection management,
+ * React 18+ controlled inputs, and tab navigation guards.
  */
 
 let ws = null;
@@ -16,6 +16,7 @@ let currentConfig = {
   targetTabId: null,
   isHalted: false,
   autoInjectPrompt: true,
+  autoConnect: true,
 };
 
 let connectionState = {
@@ -26,18 +27,30 @@ let connectionState = {
   clientId: null,
 };
 
-// Initialize configuration from storage
-chrome.storage.local.get(['serverUrl', 'secretToken', 'targetTabId', 'isHalted'], (stored) => {
-  if (stored.serverUrl) currentConfig.serverUrl = stored.serverUrl;
-  if (stored.secretToken) currentConfig.secretToken = stored.secretToken;
-  if (stored.targetTabId) currentConfig.targetTabId = stored.targetTabId;
-  if (stored.isHalted !== undefined) currentConfig.isHalted = stored.isHalted;
+/**
+ * Handle initial storage load
+ */
+function onStorageInitialized(stored) {
+  if (stored && typeof stored === 'object') {
+    if (stored.serverUrl) currentConfig.serverUrl = stored.serverUrl;
+    if (stored.secretToken) currentConfig.secretToken = stored.secretToken;
+    if (stored.targetTabId) currentConfig.targetTabId = stored.targetTabId;
+    if (stored.isHalted !== undefined) currentConfig.isHalted = stored.isHalted;
+    if (stored.autoConnect !== undefined) currentConfig.autoConnect = stored.autoConnect;
+  }
 
-  connectWebSocket();
-});
+  if (currentConfig.autoConnect) {
+    connectWebSocket();
+  }
+}
 
-// Listen for storage changes
-chrome.storage.onChanged.addListener((changes) => {
+// Initialize configuration from storage with named function
+chrome.storage.local.get(['serverUrl', 'secretToken', 'targetTabId', 'isHalted', 'autoConnect'], onStorageInitialized);
+
+/**
+ * Handle storage changes
+ */
+function onStorageChanged(changes) {
   let needsReconnect = false;
   if (changes.serverUrl && changes.serverUrl.newValue !== changes.serverUrl.oldValue) {
     currentConfig.serverUrl = changes.serverUrl.newValue;
@@ -53,11 +66,19 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.isHalted) {
     currentConfig.isHalted = changes.isHalted.newValue;
   }
+  if (changes.autoConnect) {
+    currentConfig.autoConnect = changes.autoConnect.newValue;
+    if (currentConfig.autoConnect && !connectionState.connected) {
+      needsReconnect = true;
+    }
+  }
 
   if (needsReconnect) {
     reconnectWebSocket();
   }
-});
+}
+
+chrome.storage.onChanged.addListener(onStorageChanged);
 
 /**
  * Normalize input URL to valid WebSocket protocol (ws:// or wss://)
@@ -85,6 +106,63 @@ function normalizeWsUrl(rawUrl) {
 }
 
 /**
+ * WebSocket Open Handler
+ */
+function onWebSocketOpen() {
+  const normalizedUrl = normalizeWsUrl(currentConfig.serverUrl);
+  console.log('[Background] Connected to Relay Server at:', normalizedUrl);
+  connectionState.connected = true;
+  connectionState.status = 'connected';
+  connectionState.lastError = null;
+  reconnectAttempts = 0;
+  updateBadge('ON', '#22c55e');
+
+  // Send Authentication
+  sendWsMessage({
+    type: 'AUTH',
+    role: 'extension_bg',
+    token: currentConfig.secretToken,
+  });
+
+  startKeepAlive();
+  broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
+}
+
+/**
+ * WebSocket Message Handler
+ */
+async function onWebSocketMessage(event) {
+  try {
+    const msg = JSON.parse(event.data);
+    await handleServerMessage(msg);
+  } catch (err) {
+    console.error('[Background] Failed to parse server message:', err);
+  }
+}
+
+/**
+ * WebSocket Close Handler
+ */
+function onWebSocketClose() {
+  stopKeepAlive();
+  connectionState.connected = false;
+  connectionState.authenticated = false;
+  connectionState.status = 'disconnected';
+  updateBadge('OFF', '#ef4444');
+  broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
+  scheduleReconnect();
+}
+
+/**
+ * WebSocket Error Handler
+ */
+function onWebSocketError() {
+  connectionState.lastError = 'Relay server offline or unreachable';
+  connectionState.status = 'disconnected';
+  broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
+}
+
+/**
  * Connect to Cloud / Local Relay Server via WebSocket
  */
 function connectWebSocket() {
@@ -103,50 +181,10 @@ function connectWebSocket() {
     }
 
     ws = new WebSocket(urlObj.toString());
-
-    ws.onopen = () => {
-      console.log('[Background] Connected to Relay Server at:', normalizedUrl);
-      connectionState.connected = true;
-      connectionState.status = 'connected';
-      connectionState.lastError = null;
-      reconnectAttempts = 0;
-      updateBadge('ON', '#22c55e');
-
-      // Send Authentication
-      sendWsMessage({
-        type: 'AUTH',
-        role: 'extension_bg',
-        token: currentConfig.secretToken,
-      });
-
-      startKeepAlive();
-      broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
-    };
-
-    ws.onmessage = async (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        await handleServerMessage(msg);
-      } catch (err) {
-        console.error('[Background] Failed to parse server message:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      stopKeepAlive();
-      connectionState.connected = false;
-      connectionState.authenticated = false;
-      connectionState.status = 'disconnected';
-      updateBadge('OFF', '#ef4444');
-      broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
-      scheduleReconnect();
-    };
-
-    ws.onerror = () => {
-      connectionState.lastError = 'Relay server offline or unreachable';
-      connectionState.status = 'disconnected';
-      broadcastToPopup({ type: 'WS_STATUS_CHANGE', state: connectionState });
-    };
+    ws.onopen = onWebSocketOpen;
+    ws.onmessage = onWebSocketMessage;
+    ws.onclose = onWebSocketClose;
+    ws.onerror = onWebSocketError;
   } catch (e) {
     connectionState.lastError = e.message;
     connectionState.status = 'disconnected';
@@ -154,14 +192,16 @@ function connectWebSocket() {
   }
 }
 
+function onKeepAliveTick() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    sendWsMessage({ type: 'PING' });
+  }
+}
+
 function startKeepAlive() {
   stopKeepAlive();
-  // Send lightweight ping every 20 seconds to prevent Manifest V3 worker dormancy
-  keepAliveInterval = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      sendWsMessage({ type: 'PING' });
-    }
-  }, 20000);
+  // 20-second active heartbeat
+  keepAliveInterval = setInterval(onKeepAliveTick, 20000);
 }
 
 function stopKeepAlive() {
@@ -171,11 +211,15 @@ function stopKeepAlive() {
   }
 }
 
+function onReconnectTimeout() {
+  connectWebSocket();
+}
+
 function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
   const delay = Math.min(2500 * Math.pow(1.4, reconnectAttempts), MAX_RECONNECT_DELAY);
   reconnectAttempts++;
-  reconnectTimer = setTimeout(connectWebSocket, delay);
+  reconnectTimer = setTimeout(onReconnectTimeout, delay);
 }
 
 function reconnectWebSocket() {
@@ -280,7 +324,7 @@ async function executeBrowserAction(action) {
   // Guard against restricted chrome:// or internal URLs
   if (isRestrictedUrl(tab.url)) {
     if (action.action === 'navigate' && action.url) {
-      // Proceed with navigation to valid URL
+      // Allow navigation to proceed
     } else {
       await chrome.tabs.update(tab.id, { url: 'https://www.google.com' });
       await waitForTabComplete(tab.id);
@@ -296,7 +340,7 @@ async function executeBrowserAction(action) {
 
     await chrome.tabs.update(tab.id, { url: targetUrl });
     await waitForTabComplete(tab.id);
-    await new Promise((r) => setTimeout(r, 1000)); // Allow hydration
+    await new Promise((r) => setTimeout(r, 1000));
     return await extractTabState(tab.id);
   }
 
@@ -338,7 +382,6 @@ async function executeBrowserAction(action) {
 
   const response = executionResults?.[0]?.result || { status: 'error', error_message: 'No result from page script' };
 
-  // Wait brief moment for dynamic renders then extract updated DOM state
   await new Promise((r) => setTimeout(r, 800));
   const updatedState = await extractTabState(tab.id);
 
@@ -433,10 +476,10 @@ function inPageActionRunner(action) {
       const isContentEditable = el.isContentEditable || el.getAttribute('contenteditable') === 'true';
 
       if ('value' in el && !isContentEditable) {
-        // Use native setter for React 18+ controlled input support
+        // Native prototype setter for React 18+ support
         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set ||
                              Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
-        
+
         if (action.clear_first !== false) {
           if (nativeSetter) nativeSetter.call(el, '');
           else el.value = '';
@@ -581,7 +624,6 @@ async function getOrCreateTargetTab() {
     }
   }
 
-  // Find accessible non-ChatGPT tab
   const allTabs = await chrome.tabs.query({});
   for (const t of allTabs) {
     if (t.id && t.url && !t.url.includes('chatgpt.com') && !isRestrictedUrl(t.url)) {
@@ -591,7 +633,6 @@ async function getOrCreateTargetTab() {
     }
   }
 
-  // Fallback: create a new tab
   const newTab = await chrome.tabs.create({ url: 'https://www.google.com' });
   currentConfig.targetTabId = newTab.id;
   chrome.storage.local.set({ targetTabId: newTab.id });
