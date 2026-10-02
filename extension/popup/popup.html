@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ChatGPT Computer Use Controller</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-brand">
+        <div class="bot-icon">🤖</div>
+        <div>
+          <h1 class="title">ChatGPT Agent</h1>
+          <p class="subtitle">Computer-Use Controller</p>
+        </div>
+      </div>
+      <div id="connectionBadge" class="badge badge-disconnected">
+        <span class="status-dot"></span>
+        <span id="connectionText">Offline</span>
+      </div>
+    </header>
+
+    <!-- Emergency Killswitch Banner -->
+    <div id="haltBanner" class="halt-banner hidden">
+      <span>🚨 EMERGENCY HALT ACTIVE</span>
+      <button id="resumeBtn" class="btn btn-xs btn-outline">Resume</button>
+    </div>
+
+    <!-- Quick Actions -->
+    <section class="section">
+      <div class="action-grid">
+        <button id="startChatBtn" class="btn btn-primary">
+          <span class="icon">✨</span>
+          <span>Start Agent Chat</span>
+        </button>
+        <button id="emergencyHaltBtn" class="btn btn-danger">
+          <span class="icon">🛑</span>
+          <span>Killswitch</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Target Tab Selector -->
+    <section class="section">
+      <div class="section-header">
+        <label for="tabSelect" class="section-label">Target Browser Tab</label>
+        <button id="refreshTabsBtn" class="btn-icon" title="Refresh open tabs">🔄</button>
+      </div>
+      <div class="tab-control-group">
+        <select id="tabSelect" class="select-input">
+          <option value="">Loading tabs...</option>
+        </select>
+        <button id="newTabBtn" class="btn btn-secondary btn-sm" title="Create new target tab">+ New Tab</button>
+      </div>
+    </section>
+
+    <!-- Live Execution Feed -->
+    <section class="section">
+      <div class="section-header">
+        <span class="section-label">Live Activity Feed</span>
+        <span id="logCounter" class="text-muted text-xs">0 events</span>
+      </div>
+      <div id="logContainer" class="log-container">
+        <div class="log-empty">No actions executed yet.</div>
+      </div>
+    </section>
+
+    <!-- Settings Toggle & Form -->
+    <section class="section">
+      <button id="toggleSettingsBtn" class="btn btn-ghost btn-full">
+        <span>⚙️ Configuration & Relay Server</span>
+        <span id="settingsCaret">▼</span>
+      </button>
+
+      <div id="settingsPanel" class="settings-panel hidden">
+        <div class="form-group">
+          <label for="serverUrlInput" class="form-label">Relay WebSocket URL</label>
+          <input type="text" id="serverUrlInput" class="text-input" placeholder="ws://localhost:3000/ws" />
+          <small class="form-hint">Local: <code>ws://localhost:3000/ws</code> | Railway: <code>wss://your-app.up.railway.app/ws</code></small>
+        </div>
+
+        <div class="form-group">
+          <label for="secretTokenInput" class="form-label">Agent Secret Key</label>
+          <input type="password" id="secretTokenInput" class="text-input" placeholder="Secret auth token" />
+        </div>
+
+        <div class="form-group-checkbox">
+          <label class="checkbox-label">
+            <input type="checkbox" id="autoSubmitCheck" checked />
+            <span>Auto-submit observations into ChatGPT</span>
+          </label>
+        </div>
+
+        <button id="saveConfigBtn" class="btn btn-primary btn-full">Save & Reconnect</button>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>Zero-Cost Computer Use</span>
+      <span class="badge-tag">$0 API Mode</span>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
